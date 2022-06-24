@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "efm32"
+version = "0.1.0"
+description = "Environment description for EFM32 MCU Rust PAC/HAL generation helper tool"
+authors = ["Vladimir Petrigo <vladimir.petrigo@gmail.com>"]
+
+[tool.poetry.dependencies]
+python = ">=3.7"
+toml = "~0.10"
+
+[tool.poetry.dev-dependencies]
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
