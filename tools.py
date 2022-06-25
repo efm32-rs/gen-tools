@@ -2,24 +2,20 @@
 import argparse
 import asyncio
 import dataclasses
-import functools
 import multiprocessing
 import pathlib
 import re
 import shutil
 import tempfile
-from typing import Union, Iterable, Dict, Any
+from typing import Union, Iterable, Dict, Any, Optional
 
 import toml
 
 LICENSE = "BSD-3-Clause"
-VERSION: str
-REPOSITORY: str
 AUTHORS = ["Vladimir Petrigo <vladimir.petrigo@gmail.com>"]
-SVD_DIR: pathlib.Path
-PACS_DIR: pathlib.Path
 
 CRATE_GEN_SEM = asyncio.Semaphore(multiprocessing.cpu_count())
+PUBLISH_SEM = asyncio.Semaphore(1)
 OUT_DIR_LOCK = asyncio.Lock()
 
 
@@ -29,18 +25,20 @@ class SvdMeta:
     path: pathlib.Path
 
 
-def mcu_crate_toml_template(svd_descr: SvdMeta) -> Dict[str, Any]:
+def mcu_crate_toml_template(
+    svd_descr: SvdMeta, repository: str, version: str
+) -> Dict[str, Any]:
     cargo_toml_mcu_template = {
         "package": {
             "name": f"{svd_descr.name}-pac",
             "description": f"Peripheral access API for {svd_descr.name.upper()} MCU (generated using svd2rust)",
-            "homepage": REPOSITORY,
-            "version": VERSION,
+            "homepage": repository,
+            "version": version,
             "authors": AUTHORS,
             "license": LICENSE,
             "keywords": ["no-std", "arm", "cortex-m", "efm32"],
             "categories": ["embedded", "hardware-support", "no-std"],
-            "repository": REPOSITORY,
+            "repository": repository,
             "readme": "README.md",
             "edition": "2021",
         },
@@ -78,10 +76,16 @@ work by you, as defined in the BSD-3-Clause license without any additional terms
     return readme_template
 
 
-async def generate_svd2rust_crate(svd_descr: SvdMeta, pac_family: str) -> None:
+async def generate_svd2rust_crate(
+    pacs_dir: Union[str, pathlib.Path],
+    svd_descr: SvdMeta,
+    pac_family: str,
+    repository: str,
+    version: str,
+) -> None:
     print(svd_descr.name, svd_descr.path)
 
-    out_dir = PACS_DIR.joinpath(f"{pac_family}", f"{svd_descr.name}")
+    out_dir = pacs_dir.joinpath(f"{pac_family}", f"{svd_descr.name}")
 
     async with OUT_DIR_LOCK:
         if out_dir.exists():
@@ -115,7 +119,7 @@ async def generate_svd2rust_crate(svd_descr: SvdMeta, pac_family: str) -> None:
                 shutil.move(element, out_dir)
 
             with out_dir.joinpath("Cargo.toml").open("w+") as cargo_toml:
-                content = mcu_crate_toml_template(svd_descr)
+                content = mcu_crate_toml_template(svd_descr, repository, version)
                 toml.dump(content, cargo_toml)
 
             pret = await asyncio.create_subprocess_exec(*["cargo", "fmt"], cwd=out_dir)
@@ -140,7 +144,13 @@ def walk_svd_files(svd_dir: Union[str, pathlib.Path]) -> Iterable[SvdMeta]:
             )
 
 
-async def generate_svd2rust_crates(svd_dir: Union[str, pathlib.Path]) -> None:
+async def generate_svd2rust_crates(args: argparse.Namespace) -> None:
+    svd_dir: Union[str, pathlib.Path] = pathlib.Path(args.svd_dir).resolve()
+    pacs_dir = (
+        args.out_dir if args.out_dir is not None else svd_dir.parent.joinpath("pacs")
+    )
+    version = args.version
+    repository = args.repo
     tasks = []
 
     for p in pathlib.Path(svd_dir).iterdir():
@@ -149,7 +159,11 @@ async def generate_svd2rust_crates(svd_dir: Union[str, pathlib.Path]) -> None:
 
             for svd_file in walk_svd_files(p):
                 tasks.append(
-                    asyncio.create_task(generate_svd2rust_crate(svd_file, pac_family))
+                    asyncio.create_task(
+                        generate_svd2rust_crate(
+                            pacs_dir, svd_file, pac_family, repository, version
+                        )
+                    )
                 )
 
     await asyncio.gather(*tasks)
@@ -164,49 +178,85 @@ async def run_cargo_test(project_dir: Union[str, pathlib.Path]) -> None:
     assert pret.returncode == 0
 
 
-async def run_pacs_test(pacs_dir: Union[str, pathlib.Path]) -> None:
+async def run_pacs_test(args: argparse.Namespace) -> None:
+    pacs_dir: Union[str, pathlib.Path] = args.dir
+    exclude_dirs: Optional[Iterable[Union[str, pathlib.Path]]] = args.exclude
     tasks = []
 
     for p in pathlib.Path(pacs_dir).rglob("Cargo.toml"):
-        full_path = p.resolve().parent
-        tasks.append(asyncio.create_task(run_cargo_test(full_path)))
+        if not any((ex in str(p.resolve()) for ex in exclude_dirs)):
+            full_path = p.resolve().parent
+            tasks.append(asyncio.create_task(run_cargo_test(full_path)))
 
     await asyncio.gather(*tasks)
 
 
-def main() -> None:
-    global SVD_DIR, PACS_DIR, VERSION, REPOSITORY
-    parser = argparse.ArgumentParser(description="EFM32 Helper Tooling")
+async def publish_crate(pac_dir: Union[str, pathlib.Path], is_dry_run: bool) -> None:
+    cmd = ["cargo", "publish"]
 
-    parser.add_argument(
+    if is_dry_run:
+        cmd.append("--dry-run")
+
+    pret = await asyncio.create_subprocess_exec(*cmd, cwd=pac_dir)
+    await pret.wait()
+    assert pret.returncode == 0
+    pret = await asyncio.create_subprocess_exec(*["cargo", "clean"], cwd=pac_dir)
+    await pret.wait()
+    assert pret.returncode == 0
+
+
+async def run_publish(args: argparse.Namespace) -> None:
+    pacs_dir = pathlib.Path(args.dir).resolve()
+    exclude_dirs: Optional[Iterable[Union[str, pathlib.Path]]] = args.exclude
+    dry_run = args.dry_run if args.dry_run is not None else False
+
+    for p in pacs_dir.rglob("Cargo.toml"):
+        if not any((ex in str(p.resolve()) for ex in exclude_dirs)):
+            await publish_crate(p.parent, dry_run)
+            delay_minutes = 10 * 60
+            await asyncio.sleep(delay_minutes)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="EFM32 Helper Tooling")
+    pacs_parser = parser.add_subparsers(help="Tool command", dest="command")
+    pacs = pacs_parser.add_parser("pacs-generate", help="Run PACs generation")
+    pacs.add_argument(
         "--svd-dir", required=True, help="SVD files directory to scan for"
     )
-    parser.add_argument(
+    pacs.add_argument(
         "--out-dir",
         help="Output directory for Rust crates output (by default it is set to the same root svd_dir in)",
     )
-    parser.add_argument("--version", required=True, help="Generated crates version")
-    parser.add_argument("--repo", required=True, help="Repository crates assigned tob")
-    pacs_parser = parser.add_subparsers(help="Tool command", dest="command")
-    pacs_parser.add_parser("pacs-generate", help="Run PACs generation")
-    pacs_parser.add_parser("test", help="Run PACs tests")
+    pacs.add_argument("--version", required=True, help="Generated crates version")
+    pacs.add_argument("--repo", required=True, help="Repository crates assigned tob")
+
+    test = pacs_parser.add_parser("test", help="Run PACs tests")
+    test.add_argument("--dir", required=True, help="A PAC directory to run tests in")
+    test.add_argument(
+        "--exclude", action="append", help="Exclude directory with a PAC from testing"
+    )
+
+    publish = pacs_parser.add_parser("publish", help="Publish group of PACs crates")
+    publish.add_argument(
+        "-n", "--dry-run", action="store_true", help="Dry run publishing"
+    )
+    publish.add_argument(
+        "--dir", required=True, help="Directory to publish crates from"
+    )
+    publish.add_argument(
+        "--exclude", action="append", help="Exclude crate from publishing"
+    )
 
     args = parser.parse_args()
-
-    SVD_DIR = pathlib.Path(args.svd_dir).resolve()
-    PACS_DIR = (
-        args.out_dir if args.out_dir is not None else SVD_DIR.parent.joinpath("pacs")
-    )
-    VERSION = args.version
-    REPOSITORY = args.repo
-
     command_handler = {
-        "pacs-generate": functools.partial(generate_svd2rust_crates, SVD_DIR),
-        "test": functools.partial(run_pacs_test, PACS_DIR),
+        "pacs-generate": generate_svd2rust_crates,
+        "test": run_pacs_test,
+        "publish": run_publish,
     }
 
     if command_handler.get(args.command) is not None:
-        asyncio.run(command_handler[args.command]())
+        asyncio.run(command_handler[args.command](args))
 
 
 if __name__ == "__main__":

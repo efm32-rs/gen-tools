@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "efm32"
+name = "gen-tools"
 version = "0.1.0"
 description = "Environment description for EFM32 MCU Rust PAC/HAL generation helper tool"
 authors = ["Vladimir Petrigo <vladimir.petrigo@gmail.com>"]
