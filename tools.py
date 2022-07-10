@@ -321,7 +321,7 @@ async def generate_svd2rust_crates(args: argparse.Namespace) -> None:
 async def generate_mcu_family_crates(args: argparse.Namespace) -> Iterable[PacMeta]:
     svd_dir: Union[str, pathlib.Path] = pathlib.Path(args.svd_dir).resolve()
     pacs_dir = (
-        args.out_dir if args.out_dir is not None else svd_dir.parent.joinpath("g2pacs")
+        args.out_dir if args.out_dir is not None else svd_dir.parent.joinpath("pacs")
     )
     tasks = []
     meta = []
@@ -553,7 +553,7 @@ work by you, as defined in the BSD-3-Clause license without any additional terms
             f"| `{mcu_env_meta[mcu_family]['target']['arch'][mcu_pac]}` |\n"
         )
 
-    with out_dir.joinpath("README1.md").open("w") as repo_readme:
+    with out_dir.joinpath("README.md").open("w") as repo_readme:
         repo_readme.write(
             "\n".join((repo_readme_template, crates_str, repo_readme_footer_template))
         )
@@ -579,7 +579,7 @@ async def process_mcu_family_pacs_generation(args: argparse.Namespace) -> None:
 
     svd_dir: Union[str, pathlib.Path] = pathlib.Path(args.svd_dir).resolve()
     pacs_dir = (
-        args.out_dir if args.out_dir is not None else svd_dir.parent.joinpath("g2pacs")
+        args.out_dir if args.out_dir is not None else svd_dir.parent.joinpath("pacs")
     )
     mcu_info = toml.load("mcu.toml")
     _logger.debug(f"MCU info: {mcu_info}")

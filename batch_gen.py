@@ -6,7 +6,7 @@ import pathlib
 import subprocess
 from collections import namedtuple
 
-RsMcuContext = namedtuple("RsMcuContext", ["path", "repo", "version"])
+RsMcuContext = namedtuple("RsMcuContext", ["path"])
 
 PROJECTS = (
     "efm32g-pacs",
@@ -22,8 +22,6 @@ PROJECTS = (
 PROJECTS_CTX = (
     RsMcuContext(
         path=pathlib.Path(f"../{p}").resolve(),
-        repo=f"https://github.com/efm32-rs/{p}",
-        version="0.1.0",
     )
     for p in PROJECTS
 )
@@ -38,13 +36,9 @@ def execute_pacs_generator(**_) -> None:
                 "run",
                 "python",
                 "tools.py",
-                "pacs-generate",
+                "pacs-gen",
                 "--svd-dir",
                 str(p.path.joinpath("svd")),
-                "--version",
-                p.version,
-                "--repo",
-                p.repo,
             ],
             check=True,
         )
