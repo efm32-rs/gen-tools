@@ -53,8 +53,7 @@ repository = "https://github.com/efm32-rs/efm32pg-pacs"
 version = "0.1.1"
 
 [efm32pg.target.arch]
-efm32pg1b = "thumbv7em-none-eabihf"
-efm32pg12b = "thumbv7em-none-eabihf"
+efm32pg = "thumbv7em-none-eabihf"
 efm32pg22 = "thumbv8m.main-none-eabihf"
 efm32pg23 = "thumbv8m.main-none-eabihf"
 

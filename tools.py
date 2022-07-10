@@ -359,7 +359,7 @@ def crate_lib_rs_template(
 ) -> str:
     top_mcu_family = get_mcu_family(pac_family)
     svd_tool_ver = svd_tool_ver.split()[1]
-    lib_rs_template = f"""//! Peripheral access API for {pac_family} microcontrollers
+    lib_rs_template = f"""//! Peripheral access API for {pac_family.upper()} microcontrollers
 //! (generated using [svd2rust](https://github.com/rust-embedded/svd2rust)
 //! {svd_tool_ver})
 //!
@@ -509,7 +509,7 @@ def write_repo_readme(
     out_dir: Union[str, pathlib.Path], mcu_env_meta: Dict[str, Any], pacs: List[str]
 ) -> None:
     mcu_family = get_mcu_family(pacs[0])
-    repo_readme_template = f"""# {mcu_family.upper()} support for Rust
+    repo_readme_template = f"""# {mcu_env_meta[mcu_family]['name']} support for Rust
 
 [![PACs](https://github.com/efm32-rs/{mcu_family}-pacs/actions/workflows/pacs.yml/badge.svg)](https://github.com/efm32-rs/{mcu_family}-pacs/actions/workflows/pacs.yml)
 
@@ -569,14 +569,8 @@ def get_mcu_family(mcu_repr: str) -> str:
 async def process_mcu_family_pacs_generation(args: argparse.Namespace) -> None:
     proc = subprocess.run(["svd2rust", "--version"], capture_output=True, check=True)
     svd2rust_version = proc.stdout.decode().strip()
-    mcu_env_meta = toml.load("mcu.toml")
     mcu_list_meta = await generate_mcu_family_crates(args)
     _logger.debug(f"svd2rust tool version: {svd2rust_version}")
-    _logger.debug(f"MCU Env Meta: {mcu_env_meta}")
-
-    for k in mcu_env_meta.keys():
-        _logger.debug(f"MCU {k.upper()}: name {mcu_env_meta[k]['name']}")
-
     svd_dir: Union[str, pathlib.Path] = pathlib.Path(args.svd_dir).resolve()
     pacs_dir = (
         args.out_dir if args.out_dir is not None else svd_dir.parent.joinpath("pacs")
@@ -588,10 +582,9 @@ async def process_mcu_family_pacs_generation(args: argparse.Namespace) -> None:
     for mcu_meta in mcu_list_meta:
         generated_pacs.append(mcu_meta.family)
         high_level_family = get_mcu_family(mcu_meta.family)
-        _logger.debug(f"PAC Family: {mcu_meta.family} HLF: {high_level_family}")
         _logger.debug(
             (
-                f"Crate: {mcu_meta.family}: {mcu_info[high_level_family]['name']} "
+                f"Crate [{mcu_meta.family}] - {mcu_info[high_level_family]['name']} "
                 f"arch: {mcu_info[high_level_family]['target']['arch'][mcu_meta.family]}"
             )
         )
@@ -605,17 +598,32 @@ async def process_mcu_family_pacs_generation(args: argparse.Namespace) -> None:
         )
 
     repo_root = pacs_dir.parent
-    write_repo_readme(repo_root, mcu_env_meta, generated_pacs)
+    write_repo_readme(repo_root, mcu_info, generated_pacs)
     _logger.info(f"PACS: {generated_pacs}")
 
 
 async def run_cargo_test(project_dir: Union[str, pathlib.Path]) -> None:
-    pret = await asyncio.create_subprocess_exec(*["cargo", "test"], cwd=project_dir)
-    await pret.wait()
-    assert pret.returncode == 0
-    pret = await asyncio.create_subprocess_exec(*["cargo", "clean"], cwd=project_dir)
-    await pret.wait()
-    assert pret.returncode == 0
+    crate_mcu_features = filter(
+        lambda x: x.startswith("efm32"),
+        toml.load(project_dir.joinpath("Cargo.toml"))["features"],
+    )
+    mcu_info_meta = toml.load("mcu.toml")
+    target_arch = mcu_info_meta[get_mcu_family(project_dir.name)]["target"]["arch"][
+        project_dir.name
+    ]
+
+    for feature in crate_mcu_features:
+        pret = await asyncio.create_subprocess_exec(
+            *["cargo", "check", "--features", f"rt, {feature}", "--target", target_arch],
+            cwd=project_dir,
+        )
+        await pret.wait()
+        assert pret.returncode == 0
+        pret = await asyncio.create_subprocess_exec(
+            *["cargo", "clean"], cwd=project_dir
+        )
+        await pret.wait()
+        assert pret.returncode == 0
 
 
 async def run_pacs_test(args: argparse.Namespace) -> None:
