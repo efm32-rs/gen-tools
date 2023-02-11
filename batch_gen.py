@@ -32,8 +32,6 @@ def execute_pacs_generator(**_) -> None:
         print(p)
         subprocess.run(
             [
-                "poetry",
-                "run",
                 "python",
                 "tools.py",
                 "pacs-gen",
@@ -46,7 +44,7 @@ def execute_pacs_generator(**_) -> None:
 
 def execute_publish(args: argparse.Namespace) -> None:
     for p in PROJECTS_CTX:
-        cmd = ["poetry", "run", "python", "tools.py", "publish", "--dir", str(p.path)]
+        cmd = ["python", "tools.py", "publish", "--dir", str(p.path)]
 
         if args.dry_run:
             cmd.append("--dry-run")
@@ -62,7 +60,7 @@ def execute_publish(args: argparse.Namespace) -> None:
 
 def generate_doc_md_table(**kwargs: argparse.Namespace) -> None:
     pacs_dir = pathlib.Path(kwargs["args"].dir).resolve()
-    arch = kwargs["args"].arch if kwargs["args"].arch is not None else "#FIXME"
+    arch = kwargs.get("args", "#FIXME")
     docs_md_header = r"""
 | Crate| Docs | crates.io | target |
 |------|------|-----------|--------|"""
@@ -77,6 +75,34 @@ def generate_doc_md_table(**kwargs: argparse.Namespace) -> None:
     print(os.linesep.join(out))
 
 
+def tag_release(**_args: argparse.Namespace) -> None:
+    for p in PROJECTS_CTX:
+        cmd = ["python", "tools.py", "tag", "--dir", str(p.path)]
+        subprocess.run(
+            cmd,
+            check=True,
+        )
+
+
+def test_crates(args: argparse.Namespace) -> None:
+    for p in PROJECTS_CTX:
+        cmd = [
+            "python",
+            "tools.py",
+            "test",
+            "--dir",
+            str(p.path),
+        ]
+
+        if args.exclude:
+            cmd.extend(itertools.chain(*[["--exclude", e] for e in args.exclude]))
+
+        subprocess.run(
+            cmd,
+            check=True,
+        )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Batch generator for EFM32 Rust Crates"
@@ -84,9 +110,12 @@ if __name__ == "__main__":
 
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("pacs")
+    commands.add_parser("tag", help="Tag PACs repositories")
     docmd = commands.add_parser("docmd")
     docmd.add_argument("--dir", required=True, help="Directory where PACs can be found")
     docmd.add_argument("--arch", help="PACs architecture")
+    test = commands.add_parser("test")
+    test.add_argument("--exclude", action="append", help="Exclude crate from testing")
     publish = commands.add_parser("publish")
     publish.add_argument(
         "-n", "--dry-run", action="store_true", help="Dry run publishing enable"
@@ -100,6 +129,8 @@ if __name__ == "__main__":
         "pacs": execute_pacs_generator,
         "docmd": generate_doc_md_table,
         "publish": execute_publish,
+        "tag": tag_release,
+        "test": test_crates,
     }
 
     if handlers.get(args.command) is not None:
