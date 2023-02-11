@@ -589,14 +589,22 @@ async def run_pacs_test(args: argparse.Namespace) -> None:
     await asyncio.gather(*tasks)
 
 
-async def publish_crate(pac_dir: Union[str, pathlib.Path], is_dry_run: bool) -> None:
-    cmd = ["cargo", "publish", "--no-default-features"]
+async def publish_crate(
+    pac_dir: Union[str, pathlib.Path], mcu_meta_info: Dict[str, Any], is_dry_run: bool
+) -> None:
+    mcu_family = get_mcu_family(pac_dir.name)
+    pac_name = pac_dir.name
+    target = mcu_meta_info[mcu_family]["target"]["arch"][pac_name]
+    cmd = ["cargo", "publish", "--no-default-features", "--target", f"{target}"]
 
     if is_dry_run:
         cmd.append("--dry-run")
 
+    pret = await asyncio.create_subprocess_exec(*["cargo", "clean"], cwd=pac_dir)
+    await pret.wait()
     pret = await asyncio.create_subprocess_exec(*cmd, cwd=pac_dir)
     await pret.wait()
+    assert pret.returncode == 0
     pret = await asyncio.create_subprocess_exec(*["cargo", "clean"], cwd=pac_dir)
     await pret.wait()
     assert pret.returncode == 0
@@ -605,15 +613,18 @@ async def publish_crate(pac_dir: Union[str, pathlib.Path], is_dry_run: bool) -> 
 async def run_publish(args: argparse.Namespace) -> None:
     pacs_dir = pathlib.Path(args.dir).resolve()
     exclude_dirs: Optional[Iterable[Union[str, pathlib.Path]]] = args.exclude
-    dry_run = args.dry_run if args.dry_run is not None else False
+    is_dry_run = args.dry_run
+    mcu_info_meta = toml.load("mcu.toml")
 
     for p in pacs_dir.rglob("Cargo.toml"):
         if exclude_dirs is None or not any(
             (ex in str(p.resolve()) for ex in exclude_dirs)
         ):
-            await publish_crate(p.parent, dry_run)
-            delay_minutes = 5 * 60
-            await asyncio.sleep(delay_minutes)
+            await publish_crate(p.parent, mcu_info_meta, is_dry_run)
+
+            if not is_dry_run:
+                delay_minutes = 5 * 60
+                await asyncio.sleep(delay_minutes)
 
 
 async def run_tagging(args: argparse.Namespace) -> None:
@@ -656,7 +667,7 @@ def main() -> None:
 
     publish = pacs_parser.add_parser("publish", help="Publish group of PACs crates")
     publish.add_argument(
-        "-n", "--dry-run", action="store_true", help="Dry run publishing"
+        "-n", "--dry-run", default=False, action="store_true", help="Dry run publishing"
     )
     publish.add_argument(
         "--dir", required=True, help="Directory to publish crates from"
