@@ -1,4 +1,28 @@
 # -*- coding: utf-8 -*-
+"""
+`tools.py` util
+===============
+
+Helper tool for making PAC specific operation like PACs generate, check resulted crates, etc.
+
+- generate PAC crate(s) (`SVD_DIR` is the directory where MCU's SVD files may be found):
+
+    python tools.py pacs-gen --svd-dir <SVD_DIR>
+
+- check the given crate (`DIR` is a directory where a `pacs/` directory can be found)::
+
+    python tools.py test --dir <DIR>
+
+- tag the given PAC repo with the version specified in the `mcu.toml` (`DIR` is a directory where a `pacs/` directory
+  can be found)::
+
+    python tools.py tag --dir <DIR>
+
+- publish the given PAC to `crates.io`::
+
+    python tools.py publish --dir <DIR> [--exclude <CRATE_NAME> ...]
+"""
+
 import argparse
 import asyncio
 import collections
@@ -19,7 +43,6 @@ LICENSE = "BSD-3-Clause"
 AUTHORS = ["Vladimir Petrigo <vladimir.petrigo@gmail.com>"]
 
 CRATE_GEN_SEM = asyncio.Semaphore(multiprocessing.cpu_count())
-PUBLISH_SEM = asyncio.Semaphore(1)
 OUT_DIR_LOCK = asyncio.Lock()
 
 _logger = logging.getLogger(__name__)
@@ -47,55 +70,75 @@ class EnvMeta:
 
 
 def get_project_licence() -> str:
-    default_license = "BSD-3-Clause"
+    """Get project license
 
-    return default_license
+    :return: project license SPDX string
+    """
+    return LICENSE
 
 
 def get_project_authors() -> Iterable[str]:
-    authors = ["Vladimir Petrigo <vladimir.petrigo@gmail.com>"]
+    """Get project authors' name
 
-    return authors
-
-
-def mcu_crate_toml_template(
-    svd_descr: SvdMeta, repository: str, version: str
-) -> Dict[str, Any]:
-    cargo_toml_mcu_template = {
-        "package": {
-            "name": f"{svd_descr.generic_name}-pac",
-            "description": f"Peripheral access API for {svd_descr.generic_name.upper()} MCU (generated using svd2rust)",
-            "homepage": repository,
-            "version": version,
-            "authors": AUTHORS,
-            "license": LICENSE,
-            "keywords": ["no-std", "arm", "cortex-m", "efm32"],
-            "categories": ["embedded", "hardware-support", "no-std"],
-            "repository": repository,
-            "readme": "README.md",
-            "edition": "2021",
-        },
-        "dependencies": {
-            "cortex-m": "~0.7",
-            "vcell": "~0.1",
-            "cortex-m-rt": {"version": "~0.7", "optional": True},
-        },
-        "features": {
-            "default": ["rt"],
-            "rt": ["cortex-m-rt/device"],
-        },
-    }
-
-    return cargo_toml_mcu_template
+    :return: project author iterable sequence
+    """
+    return AUTHORS
 
 
-def mcu_family_crate_toml_template(
+def get_mcu_family(mcu_repr: str) -> str:
+    """Get MCU family name from a part number/group name
+
+    :param mcu_repr: MCU part number string
+    :type mcu_repr: str
+    :return: MCU family string
+    """
+    result = re.match(r"efm32[a-zA-Z]+", mcu_repr)
+    assert result is not None
+
+    return result.group()
+
+
+def get_target_arch(
+    mcu_family: str, pac_name: str, mcu_meta_info: Dict[str, Any]
+) -> str:
+    """Get target architecture for the given MCU and PAC names
+
+    :param mcu_family: MCU family name
+    :param pac_name: PAC name
+    :param mcu_meta_info: MCU metadata from the `mcu.toml` file
+    :return: target architecture string (e.g. `thumbv7m-none-eabi`)
+    """
+    return mcu_meta_info[mcu_family]["target"]["arch"][pac_name]
+
+
+def create_no_atomic_platform_config() -> str:
+    """Generate a `config.toml` file to allow targets without atomic compare-and-swap (CAS) support
+    to be used with `portable-atomic` crate
+
+    :return: TOML string representation
+    """
+    return toml.dumps(
+        dict(build=dict(rustflags=["--cfg=portable_atomic_unsafe_assume_single_core"]))
+    )
+
+
+def generate_pac_crate_toml(
     mcu_family: str,
     supported_mcus: List[str],
     repository: str,
     version: str,
     arch: str,
 ) -> Dict[str, Any]:
+    """Get PAC `Cargo.toml` representation
+
+    :param mcu_family: PAC MCU family name
+    :param supported_mcus: a list of supported MCUs
+    :param repository: PAC repository URL
+    :param version: PAC crate version
+    :param arch: PAC architecture
+    :return: TOML dictionary that describes PAC `Cargo.toml`
+    """
+
     mcu_features = (
         [supported_mcus[0], supported_mcus[-1]]
         if len(supported_mcus) > 1
@@ -141,7 +184,12 @@ def mcu_family_crate_toml_template(
     return cargo_toml_mcu_template
 
 
-def pac_readme_template(svd_descr: SvdMeta) -> str:
+def generate_repository_readme(svd_descr: SvdMeta) -> str:
+    """Generate repository README.md from the template where all available PACs can be found
+
+    :param svd_descr: SVD files metadata
+    :return: PAC README.md representation
+    """
     readme_template = rf"""# {svd_descr.generic_name.upper()}\
     
 [![crates.io](https://img.shields.io/crates/v/{svd_descr.generic_name}-pac?label={svd_descr.generic_name})](https://crates.io/crates/{svd_descr.generic_name}-pac)
@@ -166,11 +214,103 @@ work by you, as defined in the BSD-3-Clause license without any additional terms
     return readme_template
 
 
-async def generate_mcu_family_crate(
+def generate_lib_rs(pac_family: str, mcu_list: Iterable[str], svd_tool_ver: str) -> str:
+    """Generate PAC `lib.rs` content
+
+    :param pac_family: PAC family name
+    :param mcu_list: a list of MCU that the PAC supports
+    :param svd_tool_ver: `svd2rust` tool version
+    :return: `lib.rs` content
+    """
+    top_mcu_family = get_mcu_family(pac_family)
+    svd_tool_ver = svd_tool_ver.split()[1]
+    lib_rs_template = f"""//! Peripheral access API for {pac_family.upper()} microcontrollers
+//! (generated using [svd2rust](https://github.com/rust-embedded/svd2rust)
+//! {svd_tool_ver})
+//!
+//! You can find an overview of the API here:
+//! [svd2rust/#peripheral-api](https://docs.rs/svd2rust/{svd_tool_ver}/svd2rust/#peripheral-api)
+//!
+//! For more details see the README here:
+//! [efm32-rs](https://github.com/efm32-rs/{top_mcu_family}-pacs)
+//!
+//! This crate supports all {pac_family.upper()} devices; for the complete list please see:
+//! [{pac_family}](https://github.com/efm32-rs/{top_mcu_family}-pacs/pacs/{pac_family})
+
+#![allow(non_camel_case_types)]
+#![allow(non_snake_case)]
+#![no_std]
+
+mod generic;
+pub use self::generic::*;
+
+"""
+
+    mcu_modules = os.linesep.join(
+        (
+            f"""#[cfg(feature = "{mcu}")]
+pub mod {mcu};
+"""
+            for mcu in mcu_list
+        )
+    )
+
+    return f"{lib_rs_template}{mcu_modules}"
+
+
+def generate_build_rs(mcu_list: Iterable[str]) -> str:
+    """Generate PAC `build.rs` content
+
+    :param mcu_list: a list of supported MCU names
+    :return: `build.rs` content
+    """
+    build_rs_template_header = """use std::env;
+use std::fs;
+use std::path::PathBuf;
+
+fn main() {
+    if env::var_os("CARGO_FEATURE_RT").is_some() {
+        let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
+        println!("cargo:rustc-link-search={}", out.display());
+"""
+    build_rs_template_footer = """        } else { panic!(\"No device features selected\"); };
+
+        fs::copy(device_file, out.join("device.x")).unwrap();
+        println!("cargo:rerun-if-changed={}", device_file);
+    }
+
+    println!("cargo:rerun-if-changed=build.rs");
+}
+
+"""
+    first_condition_template = """        let device_file = if env::var_os("CARGO_FEATURE_{}").is_some() {{
+            \"{}\""""
+    next_condition_template = """        }} else if env::var_os("CARGO_FEATURE_{}").is_some() {{
+            \"{}\""""
+
+    mcu_features = [
+        first_condition_template.format(mcu.upper(), f"src/{mcu}/device.x")
+        if i == 0
+        else next_condition_template.format(mcu.upper(), f"src/{mcu}/device.x")
+        for i, mcu in enumerate(mcu_list)
+    ]
+
+    return os.linesep.join(
+        (build_rs_template_header, *mcu_features, build_rs_template_footer)
+    )
+
+
+async def generate_pac_crate(
     pacs_dir: Union[str, pathlib.Path],
     svd_descr: SvdMeta,
     pac_family: str,
 ) -> None:
+    """Generate a PAC
+
+    :param pacs_dir: PAC output directory
+    :param svd_descr: SVD files metadata
+    :param pac_family: PAC name
+    """
     crate_root = pacs_dir.joinpath(f"{pac_family}")
     main_lib = crate_root.joinpath("src")
     out_dir = main_lib.joinpath(f"{svd_descr.generic_name}")
@@ -232,6 +372,14 @@ async def generate_mcu_family_crate(
 
 
 def walk_svd_files(svd_dir: Union[str, pathlib.Path]) -> Iterable[SvdMeta]:
+    """Walk through a directory with MCU specific SVD files
+
+    .. note::
+        It is expected that SVD files have `.svd` file extension suffix
+
+    :param svd_dir: Directory where SVD files can be found
+    :return: SVD file metadata iterable
+    """
     for svd_file in svd_dir.iterdir():
         if svd_file.suffix.endswith("svd"):
             yield SvdMeta(
@@ -242,6 +390,15 @@ def walk_svd_files(svd_dir: Union[str, pathlib.Path]) -> Iterable[SvdMeta]:
 
 
 async def generate_mcu_family_crates(args: argparse.Namespace) -> Iterable[PacMeta]:
+    """Generate MCU family PACs
+
+    This function finds all MCU family specific SVD files in the specified directory where
+    `svd/` directory can be found and generate a PAC for MCU group(s). Then it returns
+    all generated PACs metadata for further processing if required
+
+    :param args: CLI arguments
+    :return: PAC metadata iterable
+    """
     svd_dir: Union[str, pathlib.Path] = pathlib.Path(args.svd_dir).resolve()
     pacs_dir = (
         args.out_dir if args.out_dir is not None else svd_dir.parent.joinpath("pacs")
@@ -260,7 +417,7 @@ async def generate_mcu_family_crates(args: argparse.Namespace) -> Iterable[PacMe
                 mcu_list[svd_file.generic_name].append(svd_file.full_name)
                 tasks.append(
                     asyncio.create_task(
-                        generate_mcu_family_crate(pacs_dir, svd_file, pac_family)
+                        generate_pac_crate(pacs_dir, svd_file, pac_family)
                     )
                 )
 
@@ -277,83 +434,13 @@ async def generate_mcu_family_crates(args: argparse.Namespace) -> Iterable[PacMe
     return meta
 
 
-def crate_lib_rs_template(
-    pac_family: str, mcu_list: Iterable[str], svd_tool_ver: str
-) -> str:
-    top_mcu_family = get_mcu_family(pac_family)
-    svd_tool_ver = svd_tool_ver.split()[1]
-    lib_rs_template = f"""//! Peripheral access API for {pac_family.upper()} microcontrollers
-//! (generated using [svd2rust](https://github.com/rust-embedded/svd2rust)
-//! {svd_tool_ver})
-//!
-//! You can find an overview of the API here:
-//! [svd2rust/#peripheral-api](https://docs.rs/svd2rust/{svd_tool_ver}/svd2rust/#peripheral-api)
-//!
-//! For more details see the README here:
-//! [efm32-rs](https://github.com/efm32-rs/{top_mcu_family}-pacs)
-//!
-//! This crate supports all {pac_family.upper()} devices; for the complete list please see:
-//! [{pac_family}](https://github.com/efm32-rs/{top_mcu_family}-pacs/pacs/{pac_family})
+def generate_pac_readme(pac_meta: PacMeta, env_meta: EnvMeta) -> str:
+    """Generate PAC README.md
 
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
-#![no_std]
-
-mod generic;
-pub use self::generic::*;
-
-"""
-
-    mcu_modules = os.linesep.join(
-        (
-            f"""#[cfg(feature = "{mcu}")]
-pub mod {mcu};
-"""
-            for mcu in mcu_list
-        )
-    )
-
-    return f"{lib_rs_template}{mcu_modules}"
-
-
-def create_build_rs_template(mcu_list: Iterable[str]) -> str:
-    build_rs_template_header = """use std::env;
-use std::fs;
-use std::path::PathBuf;
-
-fn main() {
-    if env::var_os("CARGO_FEATURE_RT").is_some() {
-        let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
-        println!("cargo:rustc-link-search={}", out.display());
-"""
-    build_rs_template_footer = """        } else { panic!(\"No device features selected\"); };
-
-        fs::copy(device_file, out.join("device.x")).unwrap();
-        println!("cargo:rerun-if-changed={}", device_file);
-    }
-
-    println!("cargo:rerun-if-changed=build.rs");
-}
-
-"""
-    first_condition_template = """        let device_file = if env::var_os("CARGO_FEATURE_{}").is_some() {{
-            \"{}\""""
-    next_condition_template = """        }} else if env::var_os("CARGO_FEATURE_{}").is_some() {{
-            \"{}\""""
-
-    mcu_features = [
-        first_condition_template.format(mcu.upper(), f"src/{mcu}/device.x")
-        if i == 0
-        else next_condition_template.format(mcu.upper(), f"src/{mcu}/device.x")
-        for i, mcu in enumerate(mcu_list)
-    ]
-
-    return os.linesep.join(
-        (build_rs_template_header, *mcu_features, build_rs_template_footer)
-    )
-
-
-def create_crate_readme(pac_meta: PacMeta, env_meta: EnvMeta) -> str:
+    :param pac_meta: PAC metadata
+    :param env_meta: environment metadata (`svd2rust` version, repo URL, etc.)
+    :return: `README.md` content
+    """
     readme_template = f"""# {pac_meta.family.upper()}
     
 [![crates.io](https://img.shields.io/crates/v/{pac_meta.family}-pac?label={pac_meta.family})](https://crates.io/crates/{pac_meta.family}-pac)
@@ -393,25 +480,36 @@ For full details on the autogenerated API, please see `svd2rust` Peripheral API 
     return os.linesep.join((readme_template, supported_devices_table))
 
 
-def create_no_atomic_platform_config() -> str:
-    return toml.dumps(
-        dict(build=dict(rustflags=["--cfg=portable_atomic_unsafe_assume_single_core"]))
-    )
-
-
-def write_crate_lib_rs(
+def _write_crate_lib_rs(
     out_dir: Union[str, pathlib.Path],
     mcu_meta: PacMeta,
     env_meta: EnvMeta,
     mcu_info: Dict[str, Any],
 ) -> None:
+    """Write PAC crate specific files
+
+    The following files are to be written:
+    - `Cargo.toml`
+    - `lib.rs`
+    - `build.rs`
+    - `README.md`
+
+    For architectures that do not support atomic compare-and-swap (e.g. `ARM-v6`)
+    a `.cargo/config.coml` file is also populated with `portable-atomic` crate
+    specific configuration option to allow such operations for a crate
+
+    :param out_dir: PAC output directory
+    :param mcu_meta: Parsed PAC metadata
+    :param env_meta: Environment metadata (`svd2rust` version, crate version, etc.)
+    :param mcu_info: MCU metadata from `mcu.toml` file
+    """
     out_dir = pathlib.Path(out_dir).resolve()
     top_mcu_family = get_mcu_family(mcu_meta.family)
-    target_arch = mcu_info[top_mcu_family]["target"]["arch"][mcu_meta.family]
+    target_arch = get_target_arch(top_mcu_family, mcu_meta.family, mcu_info)
 
     with out_dir.joinpath("src", "lib.rs").open("w+") as lib_rs:
         lib_rs.write(
-            crate_lib_rs_template(
+            generate_lib_rs(
                 mcu_meta.family, mcu_meta.supported_mcus, env_meta.svd2rust_ver
             )
         )
@@ -419,7 +517,7 @@ def write_crate_lib_rs(
 
     with out_dir.joinpath("Cargo.toml").open("w+") as cargo_toml:
         toml.dump(
-            mcu_family_crate_toml_template(
+            generate_pac_crate_toml(
                 mcu_meta.family,
                 mcu_meta.supported_mcus,
                 env_meta.repo,
@@ -430,11 +528,11 @@ def write_crate_lib_rs(
         )
 
     with out_dir.joinpath("build.rs").open("w+") as build_rs:
-        build_rs.write(create_build_rs_template(mcu_meta.supported_mcus))
+        build_rs.write(generate_build_rs(mcu_meta.supported_mcus))
         subprocess.run(["rustfmt", out_dir.joinpath("build.rs")], check=True)
 
     with out_dir.joinpath("README.md").open("w+") as readme:
-        readme.write(create_crate_readme(mcu_meta, env_meta))
+        readme.write(generate_pac_readme(mcu_meta, env_meta))
 
     if target_arch in ("thumbv6m-none-eabi",):
         config_dir = out_dir.joinpath(".cargo")
@@ -446,9 +544,15 @@ def write_crate_lib_rs(
             config.write(create_no_atomic_platform_config())
 
 
-def write_repo_readme(
+def _write_repo_readme(
     out_dir: Union[str, pathlib.Path], mcu_env_meta: Dict[str, Any], pacs: List[str]
 ) -> None:
+    """Write a `README.md` file with PACs description
+
+    :param out_dir: output directory where `README.md` should be written to
+    :param mcu_env_meta: MCU metadata from `mcu.toml` file
+    :param pacs: a list of generated PACs string name
+    """
     mcu_family = get_mcu_family(pacs[0])
     repo_readme_template = f"""# {mcu_env_meta[mcu_family]['name']} support for Rust
 
@@ -500,58 +604,46 @@ work by you, as defined in the BSD-3-Clause license without any additional terms
         )
 
 
-def get_mcu_family(mcu_repr: str) -> str:
-    result = re.match(r"efm32[a-zA-Z]+", mcu_repr)
-    assert result is not None
+async def _publish_crate(
+    pac_dir: Union[str, pathlib.Path], mcu_meta_info: Dict[str, Any], is_dry_run: bool
+) -> None:
+    """Execute `cargo publish` in the given PAC directory
 
-    return result.group()
+    :param pac_dir: PAC directory
+    :param mcu_meta_info: MCU metadata from `mcu.toml` file
+    :param is_dry_run: flag that shows whether a crate should be published to the real registry or not
+    """
+    mcu_family = get_mcu_family(pac_dir.name)
+    pac_name = pac_dir.name
+    target = get_target_arch(mcu_family, pac_name, mcu_meta_info)
+    cmd = ["cargo", "publish", "--no-default-features", "--target", f"{target}"]
 
+    if is_dry_run:
+        cmd.append("--dry-run")
 
-async def process_mcu_family_pacs_generation(args: argparse.Namespace) -> None:
-    proc = subprocess.run(["svd2rust", "--version"], capture_output=True, check=True)
-    svd2rust_version = proc.stdout.decode().strip()
-    mcu_list_meta = await generate_mcu_family_crates(args)
-    _logger.debug(f"svd2rust tool version: {svd2rust_version}")
-    svd_dir: Union[str, pathlib.Path] = pathlib.Path(args.svd_dir).resolve()
-    pacs_dir = (
-        args.out_dir if args.out_dir is not None else svd_dir.parent.joinpath("pacs")
-    )
-    mcu_info = toml.load("mcu.toml")
-    _logger.debug(f"MCU info: {mcu_info}")
-    generated_pacs = []
-
-    for mcu_meta in mcu_list_meta:
-        generated_pacs.append(mcu_meta.family)
-        high_level_family = get_mcu_family(mcu_meta.family)
-        _logger.debug(
-            (
-                f"Crate [{mcu_meta.family}] - {mcu_info[high_level_family]['name']} "
-                f"arch: {mcu_info[high_level_family]['target']['arch'][mcu_meta.family]}"
-            )
-        )
-        env_meta = EnvMeta(
-            svd2rust_ver=svd2rust_version,
-            crate_ver=mcu_info[high_level_family]["version"],
-            repo=mcu_info[high_level_family]["repository"],
-        )
-        write_crate_lib_rs(
-            pacs_dir.joinpath(mcu_meta.family), mcu_meta, env_meta, mcu_info
-        )
-
-    repo_root = pacs_dir.parent
-    write_repo_readme(repo_root, mcu_info, generated_pacs)
-    _logger.info(f"PACS: {generated_pacs}")
+    pret = await asyncio.create_subprocess_exec(*["cargo", "clean"], cwd=pac_dir)
+    await pret.wait()
+    pret = await asyncio.create_subprocess_exec(*cmd, cwd=pac_dir)
+    await pret.wait()
+    assert pret.returncode == 0
+    pret = await asyncio.create_subprocess_exec(*["cargo", "clean"], cwd=pac_dir)
+    await pret.wait()
+    assert pret.returncode == 0
 
 
-async def run_cargo_test(project_dir: Union[str, pathlib.Path]) -> None:
+async def _cargo_check(project_dir: Union[str, pathlib.Path]) -> None:
+    """Execute `cargo check` command with the necessary arguments in a PAC directory
+
+    :param project_dir: a PAC directory to run `cargo check` in
+    """
     crate_mcu_features = filter(
         lambda x: x.startswith("efm32"),
         toml.load(project_dir.joinpath("Cargo.toml"))["features"],
     )
-    mcu_info_meta = toml.load("mcu.toml")
-    target_arch = mcu_info_meta[get_mcu_family(project_dir.name)]["target"]["arch"][
-        project_dir.name
-    ]
+    mcu_meta_info = toml.load("mcu.toml")
+    mcu_family = get_mcu_family(project_dir.name)
+    pac_name = project_dir.name
+    target_arch = get_target_arch(mcu_family, pac_name, mcu_meta_info)
 
     for feature in crate_mcu_features:
         pret = await asyncio.create_subprocess_exec(
@@ -574,7 +666,77 @@ async def run_cargo_test(project_dir: Union[str, pathlib.Path]) -> None:
         assert pret.returncode == 0
 
 
+async def run_pacs_generation(args: argparse.Namespace) -> None:
+    """Generate PAC(s) with the `svd2rust` tool
+
+    All metadata related to a MCU family is extracted from the `mcu.toml` file.
+    In the case a new MCU family available, make sure to update `mcu.toml` with
+    the following info::
+
+        [<mcu-family-name>]
+        name = "<mcu-family-string-representation>"
+        repository = "<pacs-repository URL>"
+        version = "<pacs-version>"
+
+        [<mcu-family-name>.target.arch]
+        <mcu-family-name>/<mcu-subgroup-name> = "<target-arch>"
+
+    MCU family name is something that describes a group of chips without digits related to memory
+    size, etc. E.g.:
+
+    - `EFM32GG` is the MCU family
+    - 3 subgroups available in the family: `EFM32GG`, `EFM32GG11B`, `EFM32GG12B`
+
+    :param args: CLI arguments
+    :type args: argparse.Namespace
+    """
+    proc = subprocess.run(["svd2rust", "--version"], capture_output=True, check=True)
+    svd2rust_version = proc.stdout.decode().strip()
+    mcu_list_meta = await generate_mcu_family_crates(args)
+    _logger.debug(f"svd2rust tool version: {svd2rust_version}")
+    svd_dir: Union[str, pathlib.Path] = pathlib.Path(args.svd_dir).resolve()
+    pacs_dir = (
+        args.out_dir if args.out_dir is not None else svd_dir.parent.joinpath("pacs")
+    )
+    mcu_info = toml.load("mcu.toml")
+    _logger.debug(f"MCU info: {mcu_info}")
+    generated_pacs = []
+
+    for mcu_meta in mcu_list_meta:
+        generated_pacs.append(mcu_meta.family)
+        high_level_family = get_mcu_family(mcu_meta.family)
+        _logger.debug(
+            (
+                f"Crate [{mcu_meta.family}] - {mcu_info[high_level_family]['name']} "
+                f"arch: {get_target_arch(high_level_family, mcu_meta.family, mcu_info)}"
+            )
+        )
+        env_meta = EnvMeta(
+            svd2rust_ver=svd2rust_version,
+            crate_ver=mcu_info[high_level_family]["version"],
+            repo=mcu_info[high_level_family]["repository"],
+        )
+        _write_crate_lib_rs(
+            pacs_dir.joinpath(mcu_meta.family), mcu_meta, env_meta, mcu_info
+        )
+
+    repo_root = pacs_dir.parent
+    _write_repo_readme(repo_root, mcu_info, generated_pacs)
+    _logger.info(f"PACS: {generated_pacs}")
+
+
 async def run_pacs_test(args: argparse.Namespace) -> None:
+    """Run `cargo check` for the available PAC(s)
+
+    This function finds all subdirectories with a `Cargo.toml` file in it
+    and execute `cargo check` with MCU specific options to verify whether
+    a crate passes that or not
+
+    `--dir` argument should point to PAC(s) root repository/directory
+
+    :param args: CLI arguments
+    :type args: argparse.Namespace
+    """
     pacs_dir: Union[str, pathlib.Path] = args.dir
     exclude_dirs: Optional[Iterable[Union[str, pathlib.Path]]] = (
         args.exclude if args.exclude is not None else []
@@ -584,33 +746,27 @@ async def run_pacs_test(args: argparse.Namespace) -> None:
     for p in pathlib.Path(pacs_dir).rglob("Cargo.toml"):
         if not any((ex in str(p.resolve()) for ex in exclude_dirs)):
             full_path = p.resolve().parent
-            tasks.append(asyncio.create_task(run_cargo_test(full_path)))
+            tasks.append(asyncio.create_task(_cargo_check(full_path)))
 
     await asyncio.gather(*tasks)
 
 
-async def publish_crate(
-    pac_dir: Union[str, pathlib.Path], mcu_meta_info: Dict[str, Any], is_dry_run: bool
-) -> None:
-    mcu_family = get_mcu_family(pac_dir.name)
-    pac_name = pac_dir.name
-    target = mcu_meta_info[mcu_family]["target"]["arch"][pac_name]
-    cmd = ["cargo", "publish", "--no-default-features", "--target", f"{target}"]
-
-    if is_dry_run:
-        cmd.append("--dry-run")
-
-    pret = await asyncio.create_subprocess_exec(*["cargo", "clean"], cwd=pac_dir)
-    await pret.wait()
-    pret = await asyncio.create_subprocess_exec(*cmd, cwd=pac_dir)
-    await pret.wait()
-    assert pret.returncode == 0
-    pret = await asyncio.create_subprocess_exec(*["cargo", "clean"], cwd=pac_dir)
-    await pret.wait()
-    assert pret.returncode == 0
-
-
 async def run_publish(args: argparse.Namespace) -> None:
+    """Run `cargo publish` command for the given crate
+
+    Supported features:
+
+    - `-n`/`--dry-run`: make a dry run publishing call without uploading a crate to the registry
+    - `--exclude`: exclude specified crate directory from publishing. This flag can be used multiple times
+
+    .. note::
+
+        Without the dry-run feature enabled, there is a delay between publishing crates
+        equal to 5 minutes to avoid `crates.io` limits
+
+    :param args: CLI arguments
+    :type args: argparse.Namespace
+    """
     pacs_dir = pathlib.Path(args.dir).resolve()
     exclude_dirs: Optional[Iterable[Union[str, pathlib.Path]]] = args.exclude
     is_dry_run = args.dry_run
@@ -620,7 +776,7 @@ async def run_publish(args: argparse.Namespace) -> None:
         if exclude_dirs is None or not any(
             (ex in str(p.resolve()) for ex in exclude_dirs)
         ):
-            await publish_crate(p.parent, mcu_info_meta, is_dry_run)
+            await _publish_crate(p.parent, mcu_info_meta, is_dry_run)
 
             if not is_dry_run:
                 delay_minutes = 5 * 60
@@ -628,6 +784,14 @@ async def run_publish(args: argparse.Namespace) -> None:
 
 
 async def run_tagging(args: argparse.Namespace) -> None:
+    """Assign a tag specified in the metadata file (`mcu.toml`) to the repository
+
+    The function checks whether a tag exists and tries to push that tag to the default
+    remote repository.
+
+    :param args: CLI arguments
+    :type args: argparse.Namespace
+    """
     pacs_dir = pathlib.Path(args.dir).resolve()
     mcu_info_meta = toml.load("mcu.toml")
     version = mcu_info_meta[get_mcu_family(pacs_dir.name)]["version"]
@@ -682,7 +846,7 @@ def main() -> None:
 
     args = parser.parse_args()
     command_handler = {
-        "pacs-gen": process_mcu_family_pacs_generation,
+        "pacs-gen": run_pacs_generation,
         "test": run_pacs_test,
         "publish": run_publish,
         "tag": run_tagging,
