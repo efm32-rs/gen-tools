@@ -14,13 +14,13 @@ RsMcuContext = namedtuple("RsMcuContext", ["path"])
 PROJECTS = (
     "efm32g-pacs",
     "efm32gg-pacs",
-    "efm32hg-pacs",
-    "efm32jg-pacs",
-    "efm32lg-pacs",
-    "efm32pg-pacs",
-    "efm32tg-pacs",
-    "efm32wg-pacs",
-    "efm32zg-pacs",
+    "efm32hg-pacs",  # noqa: GRG001
+    "efm32jg-pacs",  # noqa: GRG001
+    "efm32lg-pacs",  # noqa: GRG001
+    "efm32pg-pacs",  # noqa: GRG001
+    "efm32tg-pacs",  # noqa: GRG001
+    "efm32wg-pacs",  # noqa: GRG001
+    "efm32zg-pacs",  # noqa: GRG001
 )
 PROJECTS_CTX = (
     RsMcuContext(

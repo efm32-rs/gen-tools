@@ -425,7 +425,7 @@ async def generate_mcu_family_crates(args: argparse.Namespace) -> Iterable[PacMe
             meta.append(
                 PacMeta(
                     family=pac_family,
-                    supported_mcus=list(sorted(mcu_group)),
+                    supported_mcus=sorted(mcu_group),
                     supported_mcus_full=mcu_list,
                 )
             )
