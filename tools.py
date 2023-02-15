@@ -334,7 +334,7 @@ async def generate_pac_crate(
                     f"{svd_descr.path}",
                     "-o",
                     f"{tmpd}",
-                ]
+                ],
             )
             await pret.wait()
             assert pret.returncode == 0
@@ -365,7 +365,8 @@ async def generate_pac_crate(
                 shutil.move(element, out_dir)
 
             pret = await asyncio.create_subprocess_exec(
-                *["rustfmt", f"{out_dir.joinpath('mod.rs')}"], cwd=out_dir
+                *["rustfmt", f"{out_dir.joinpath('mod.rs')}"],
+                cwd=out_dir,
             )
             await pret.wait()
             assert pret.returncode == 0
@@ -409,7 +410,7 @@ async def generate_mcu_family_crates(args: argparse.Namespace) -> Iterable[PacMe
     for p in pathlib.Path(svd_dir).iterdir():
         if p.is_dir():
             pac_family = p.name.lower()
-            mcu_list = collections.defaultdict(lambda: [])
+            mcu_list = collections.defaultdict(list)
             mcu_group = set()
 
             for svd_file in walk_svd_files(p):
@@ -660,7 +661,8 @@ async def _cargo_check(project_dir: Union[str, pathlib.Path]) -> None:
         await pret.wait()
         assert pret.returncode == 0
         pret = await asyncio.create_subprocess_exec(
-            *["cargo", "clean"], cwd=project_dir
+            *["cargo", "clean"],
+            cwd=project_dir,
         )
         await pret.wait()
         assert pret.returncode == 0

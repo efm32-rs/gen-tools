@@ -1,10 +1,13 @@
 # -*- coding: utf-8 -*-
 import argparse
 import itertools
+import logging
 import os
 import pathlib
 import subprocess
 from collections import namedtuple
+
+_logger = logging.getLogger(__name__)
 
 RsMcuContext = namedtuple("RsMcuContext", ["path"])
 
@@ -27,9 +30,8 @@ PROJECTS_CTX = (
 )
 
 
-def execute_pacs_generator(**_) -> None:
+def execute_pacs_generator(_args: argparse.Namespace) -> None:
     for p in PROJECTS_CTX:
-        print(p)
         subprocess.run(
             [
                 "python",
@@ -72,7 +74,7 @@ def generate_doc_md_table(**kwargs: argparse.Namespace) -> None:
         crates_io_link = f"[![crates.io](https://img.shields.io/crates/d/{crate_name}.svg)](https://crates.io/crates/{crate_name})"
         out.append(f"|`{crate_name}`|{docs_rs_link}|{crates_io_link}|`{arch}`|")
 
-    print(os.linesep.join(out))
+    _logger.info(os.linesep.join(out))
 
 
 def tag_release(**_args: argparse.Namespace) -> None:
@@ -104,6 +106,7 @@ def test_crates(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
+    logging.basicConfig()
     parser = argparse.ArgumentParser(
         description="Batch generator for EFM32 Rust Crates"
     )
