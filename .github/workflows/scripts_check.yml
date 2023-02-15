@@ -17,12 +17,11 @@ jobs:
       POETRY_VIRTUALENVS_CREATE: false
     steps:
       - name: Set up Poetry cache for Python dependencies
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         if: startsWith(runner.os, 'Linux')
         with:
           path: ~/.cache/pypoetry
           key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
-          restore-keys: ${{ runner.os }}-poetry-
       - name: Install Poetry
         run: |
           curl -fsS -o install-poetry.py https://install.python-poetry.org/
@@ -32,6 +31,8 @@ jobs:
       - name: Get repository
         uses: actions/checkout@v3
       - name: Install dependencies
-        run: poetry install --no-interaction --no-root --with=dev
+        run: |
+          pip install --upgrade setuptools
+          poetry install --no-interaction --no-root --with=dev
       - name: Run flask8 checks
         run: poetry run python -m flake8
