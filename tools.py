@@ -327,10 +327,10 @@ async def generate_pac_crate(
             tmpd_path = pathlib.Path(tmpd)
             # Patch MCU SVD if needed
             if patch_file is not None:
-                with open(f"{patch_file}") as fp:
+                with patch_file.open() as fp:
                     patch_content = fp.read()
                 tmp_patch = f"{tmpd_path / patch_file.name}"
-                with open(f"{tmp_patch}", "w") as fp:
+                with tmp_patch.open("w") as fp:
                     fp.write(patch_content.format(svd_descr.path))
                 pret = await asyncio.create_subprocess_exec(
                     *[
