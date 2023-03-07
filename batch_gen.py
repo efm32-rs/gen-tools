@@ -60,9 +60,9 @@ def execute_publish(args: argparse.Namespace) -> None:
         )
 
 
-def generate_doc_md_table(**kwargs: argparse.Namespace) -> None:
-    pacs_dir = pathlib.Path(kwargs["args"].dir).resolve()
-    arch = kwargs.get("args", "#FIXME")
+def generate_doc_md_table(args: argparse.Namespace) -> None:
+    pacs_dir = pathlib.Path(args.dir).resolve()
+    arch = args.arch
     docs_md_header = r"""
 | Crate| Docs | crates.io | target |
 |------|------|-----------|--------|"""
@@ -77,7 +77,7 @@ def generate_doc_md_table(**kwargs: argparse.Namespace) -> None:
     _logger.info(os.linesep.join(out))
 
 
-def tag_release(**_args: argparse.Namespace) -> None:
+def tag_release(_args: argparse.Namespace) -> None:
     for p in PROJECTS_CTX:
         cmd = ["python", "tools.py", "tag", "--dir", str(p.path)]
         subprocess.run(
@@ -137,6 +137,6 @@ if __name__ == "__main__":
     }
 
     if handlers.get(args.command) is not None:
-        handlers[args.command](args=args)
+        handlers[args.command](args)
     else:
         parser.print_help()
