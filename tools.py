@@ -177,9 +177,15 @@ def generate_pac_crate_toml(
         "features": {
             "default": ["rt"],
             "rt": ["cortex-m-rt/device"],
+            "critical-section": ["dep:critical-section"],
         },
     }
     cargo_toml_mcu_template["features"].update({m: [] for m in supported_mcus})
+
+    if arch == "thumbv6m-none-eabi":
+        cargo_toml_mcu_template["features"]["critical-section"].append(
+            "portable-atomic/critical-section"
+        )
 
     return cargo_toml_mcu_template
 
@@ -311,6 +317,7 @@ async def generate_pac_crate(
     :param pacs_dir: PAC output directory
     :param svd_descr: SVD files metadata
     :param pac_family: PAC name
+    :param patch_file: Patch file for the given crate
     """
     crate_root = pacs_dir.joinpath(f"{pac_family}")
     main_lib = crate_root.joinpath("src")
@@ -324,27 +331,9 @@ async def generate_pac_crate(
 
     async with CRATE_GEN_SEM:
         with tempfile.TemporaryDirectory() as tmpd:
-            tmpd_path = pathlib.Path(tmpd)
             # Patch MCU SVD if needed
             if patch_file is not None:
-                with patch_file.open() as fp:
-                    patch_content = fp.read()
-                tmp_patch = f"{tmpd_path / patch_file.name}"
-                with tmp_patch.open("w") as fp:
-                    fp.write(patch_content.format(svd_descr.path))
-                pret = await asyncio.create_subprocess_exec(
-                    *[
-                        "svdtools",
-                        "patch",
-                        f"{tmp_patch}",
-                    ],
-                )
-                await pret.wait()
-                assert pret.returncode == 0
-                shutil.move(svd_descr.path.with_suffix(".svd.patched"), f"{tmpd}")
-                svd_descr.path = (
-                    tmpd_path / f"{svd_descr.path.with_suffix('.svd.patched').name}"
-                )
+                await _create_patched_svd(patch_file, svd_descr, tmpd)
             # Generate MCU specific module
             pret = await asyncio.create_subprocess_exec(
                 *[
@@ -437,21 +426,23 @@ async def generate_mcu_family_crates(args: argparse.Namespace) -> Iterable[PacMe
             mcu_list = collections.defaultdict(list)
             mcu_group = set()
             patch_dir = p / "patch"
-            if patch_dir.is_dir():
-                patches = [
-                    item for item in patch_dir.iterdir() if item.suffix.endswith("yaml")
-                ]
-            else:
-                patches = None
+            patches = [
+                patch_file
+                for patch_file in patch_dir.iterdir()
+                if patch_file.suffix == ".yaml"
+            ]
 
             for svd_file in walk_svd_files(p):
                 mcu_group.add(svd_file.generic_name)
                 mcu_list[svd_file.generic_name].append(svd_file.full_name)
-                group_patch = None
-                if patches:
-                    for patch in patches:
-                        if svd_file.generic_name == patch.stem.lower():
-                            group_patch = patch
+                group_patch = next(
+                    (
+                        patch
+                        for patch in patches
+                        if svd_file.generic_name == patch.stem.lower()
+                    ),
+                    None,
+                )
                 tasks.append(
                     asyncio.create_task(
                         generate_pac_crate(pacs_dir, svd_file, pac_family, group_patch)
@@ -639,6 +630,35 @@ work by you, as defined in the BSD-3-Clause license without any additional terms
         repo_readme.write(
             "\n".join((repo_readme_template, crates_str, repo_readme_footer_template))
         )
+
+
+async def _create_patched_svd(
+    patch_file: pathlib.Path, svd_descr: SvdMeta, tmp_dir: str
+) -> None:
+    """Create a patched SVD file with the `svdtools` util
+
+    :param patch_file: SVD patch file path
+    :param svd_descr: SVD file meta information
+    :param tmp_dir: Temporary directory to copy patched SVD to
+    """
+    tmp_dir_path = pathlib.Path(tmp_dir)
+    patch_file = pathlib.Path(patch_file)
+    tmp_patch = tmp_dir_path / patch_file.name
+    with patch_file.open() as fp, tmp_patch.open("w") as tp:
+        patch_content = fp.read()
+        tp.write(patch_content.format(svd_descr.path))
+    pret = await asyncio.create_subprocess_exec(
+        *[
+            "svdtools",
+            "patch",
+            f"{tmp_patch}",
+        ],
+    )
+    await pret.wait()
+    assert pret.returncode == 0
+    shutil.move(svd_descr.path.with_suffix(".svd.patched"), f"{tmp_dir}")
+    svd_patched_name = svd_descr.path.with_suffix(".svd.patched").name
+    svd_descr.path = tmp_dir_path / svd_patched_name
 
 
 async def _publish_crate(
