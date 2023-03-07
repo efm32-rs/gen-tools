@@ -426,11 +426,14 @@ async def generate_mcu_family_crates(args: argparse.Namespace) -> Iterable[PacMe
             mcu_list = collections.defaultdict(list)
             mcu_group = set()
             patch_dir = p / "patch"
-            patches = [
-                patch_file
-                for patch_file in patch_dir.iterdir()
-                if patch_file.suffix == ".yaml"
-            ]
+            if patch_dir.is_dir():
+                patches = [
+                    patch_file
+                    for patch_file in patch_dir.iterdir()
+                    if patch_file.suffix == ".yaml"
+                ]
+            else:
+                patches = []
 
             for svd_file in walk_svd_files(p):
                 mcu_group.add(svd_file.generic_name)
@@ -644,9 +647,12 @@ async def _create_patched_svd(
     tmp_dir_path = pathlib.Path(tmp_dir)
     patch_file = pathlib.Path(patch_file)
     tmp_patch = tmp_dir_path / patch_file.name
+    peripheral_dir = patch_file.parent / "peripheral"
     with patch_file.open() as fp, tmp_patch.open("w") as tp:
         patch_content = fp.read()
-        tp.write(patch_content.format(svd_descr.path))
+        tp.write(
+            patch_content.format(svd_path=svd_descr.path, peripheral_dir=peripheral_dir)
+        )
     pret = await asyncio.create_subprocess_exec(
         *[
             "svdtools",
