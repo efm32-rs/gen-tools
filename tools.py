@@ -5,7 +5,7 @@
 
 Helper tool for making PAC specific operation like PACs generate, check resulted crates, etc.
 
-- generate PAC crate(s) (`SVD_DIR` is the directory where MCU's SVD files may be found):
+- generate PAC crate(s) (`SVD_DIR` is the directory where MCU's SVD files may be found)::
 
     python tools.py pacs-gen --svd-dir <SVD_DIR>
 
@@ -425,12 +425,7 @@ async def generate_mcu_family_crates(args: argparse.Namespace) -> Iterable[PacMe
             pac_family = p.name.lower()
             mcu_list = collections.defaultdict(list)
             mcu_group = set()
-            patch_dir = p / "patch"
-            patches = [
-                patch_file
-                for patch_file in patch_dir.iterdir()
-                if patch_file.suffix == ".yaml"
-            ]
+            patches = _get_patch_files(p)
 
             for svd_file in walk_svd_files(p):
                 mcu_group.add(svd_file.generic_name)
@@ -632,6 +627,29 @@ work by you, as defined in the BSD-3-Clause license without any additional terms
         )
 
 
+def _get_patch_files(svd_dir: pathlib.Path) -> Iterable[pathlib.Path]:
+    """Get an iterable with all found patch files for the given SVD directory
+
+    Expected that the SVD directory would have the following structure::
+
+        - svd_dir/
+        -- patch/ (optional)
+        -- MCU1.svd
+        -- ...
+
+    :param svd_dir: A directory with SVD files for an MCU
+    :return: An iterable with patch files available
+    """
+    patch_dir = svd_dir / "patch"
+
+    if not patch_dir.exists():
+        return ()
+
+    return [
+        patch_file for patch_file in patch_dir.iterdir() if patch_file.suffix == ".yaml"
+    ]
+
+
 async def _create_patched_svd(
     patch_file: pathlib.Path, svd_descr: SvdMeta, tmp_dir: str
 ) -> None:
@@ -644,9 +662,13 @@ async def _create_patched_svd(
     tmp_dir_path = pathlib.Path(tmp_dir)
     patch_file = pathlib.Path(patch_file)
     tmp_patch = tmp_dir_path / patch_file.name
+    peripheral_dir = patch_file.parent / "peripheral"
+
     with patch_file.open() as fp, tmp_patch.open("w") as tp:
         patch_content = fp.read()
-        tp.write(patch_content.format(svd_descr.path))
+        tp.write(
+            patch_content.format(svd_path=svd_descr.path, peripheral_dir=peripheral_dir)
+        )
     pret = await asyncio.create_subprocess_exec(
         *[
             "svdtools",
