@@ -304,6 +304,7 @@ async def generate_pac_crate(
     pacs_dir: Union[str, pathlib.Path],
     svd_descr: SvdMeta,
     pac_family: str,
+    patch_file: Optional[Union[str, pathlib.Path]],
 ) -> None:
     """Generate a PAC
 
@@ -323,6 +324,27 @@ async def generate_pac_crate(
 
     async with CRATE_GEN_SEM:
         with tempfile.TemporaryDirectory() as tmpd:
+            tmpd_path = pathlib.Path(tmpd)
+            # Patch MCU SVD if needed
+            if patch_file is not None:
+                with patch_file.open() as fp:
+                    patch_content = fp.read()
+                tmp_patch = f"{tmpd_path / patch_file.name}"
+                with tmp_patch.open("w") as fp:
+                    fp.write(patch_content.format(svd_descr.path))
+                pret = await asyncio.create_subprocess_exec(
+                    *[
+                        "svdtools",
+                        "patch",
+                        f"{tmp_patch}",
+                    ],
+                )
+                await pret.wait()
+                assert pret.returncode == 0
+                shutil.move(svd_descr.path.with_suffix(".svd.patched"), f"{tmpd}")
+                svd_descr.path = (
+                    tmpd_path / f"{svd_descr.path.with_suffix('.svd.patched').name}"
+                )
             # Generate MCU specific module
             pret = await asyncio.create_subprocess_exec(
                 *[
@@ -402,7 +424,9 @@ async def generate_mcu_family_crates(args: argparse.Namespace) -> Iterable[PacMe
     """
     svd_dir: Union[str, pathlib.Path] = pathlib.Path(args.svd_dir).resolve()
     pacs_dir = (
-        args.out_dir if args.out_dir is not None else svd_dir.parent.joinpath("pacs")
+        pathlib.Path(args.out_dir).resolve()
+        if args.out_dir is not None
+        else svd_dir.parent.joinpath("pacs")
     )
     tasks = []
     meta = []
@@ -412,13 +436,25 @@ async def generate_mcu_family_crates(args: argparse.Namespace) -> Iterable[PacMe
             pac_family = p.name.lower()
             mcu_list = collections.defaultdict(list)
             mcu_group = set()
+            patch_dir = p / "patch"
+            if patch_dir.is_dir():
+                patches = [
+                    item for item in patch_dir.iterdir() if item.suffix.endswith("yaml")
+                ]
+            else:
+                patches = None
 
             for svd_file in walk_svd_files(p):
                 mcu_group.add(svd_file.generic_name)
                 mcu_list[svd_file.generic_name].append(svd_file.full_name)
+                group_patch = None
+                if patches:
+                    for patch in patches:
+                        if svd_file.generic_name == patch.stem.lower():
+                            group_patch = patch
                 tasks.append(
                     asyncio.create_task(
-                        generate_pac_crate(pacs_dir, svd_file, pac_family)
+                        generate_pac_crate(pacs_dir, svd_file, pac_family, group_patch)
                     )
                 )
 
@@ -698,7 +734,9 @@ async def run_pacs_generation(args: argparse.Namespace) -> None:
     _logger.debug(f"svd2rust tool version: {svd2rust_version}")
     svd_dir: Union[str, pathlib.Path] = pathlib.Path(args.svd_dir).resolve()
     pacs_dir = (
-        args.out_dir if args.out_dir is not None else svd_dir.parent.joinpath("pacs")
+        pathlib.Path(args.out_dir).resolve()
+        if args.out_dir is not None
+        else svd_dir.parent.joinpath("pacs")
     )
     mcu_info = toml.load("mcu.toml")
     _logger.debug(f"MCU info: {mcu_info}")
