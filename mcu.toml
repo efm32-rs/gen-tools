@@ -2,7 +2,7 @@
 [efm32g]
 name = "EFM32G (Gecko)"
 repository = "https://github.com/efm32-rs/efm32g-pacs"
-version = "0.1.3"
+version = "0.1.4"
 
 [efm32g.target.arch]
 efm32g = "thumbv7m-none-eabi"
@@ -11,7 +11,7 @@ efm32g = "thumbv7m-none-eabi"
 [efm32gg]
 name = "EFM32GG (Giant Gecko / Giant Gecko S1)"
 repository = "https://github.com/efm32-rs/efm32gg-pacs"
-version = "0.1.3"
+version = "0.1.4"
 
 [efm32gg.target.arch]
 efm32gg = "thumbv7m-none-eabi"
@@ -22,7 +22,7 @@ efm32gg12b = "thumbv7em-none-eabihf"
 [efm32hg]
 name = "EFM32HG (Happy Gecko)"
 repository = "https://github.com/efm32-rs/efm32hg-pacs"
-version = "0.1.3"
+version = "0.1.4"
 
 [efm32hg.target.arch]
 efm32hg = "thumbv6m-none-eabi"
@@ -31,7 +31,7 @@ efm32hg = "thumbv6m-none-eabi"
 [efm32jg]
 name = "EFM32JG (Jade Gecko)"
 repository = "https://github.com/efm32-rs/efm32jg-pacs"
-version = "0.1.3"
+version = "0.1.4"
 
 [efm32jg.target.arch]
 efm32jg1b = "thumbv7m-none-eabi"
@@ -41,7 +41,7 @@ efm32jg12b = "thumbv7m-none-eabi"
 [efm32lg]
 name = "EFM32LG (Leopard Gecko)"
 repository = "https://github.com/efm32-rs/efm32lg-pacs"
-version = "0.1.3"
+version = "0.1.4"
 
 [efm32lg.target.arch]
 efm32lg = "thumbv7m-none-eabi"
@@ -50,7 +50,7 @@ efm32lg = "thumbv7m-none-eabi"
 [efm32pg]
 name = "EFM32PG (Pearl Gecko)"
 repository = "https://github.com/efm32-rs/efm32pg-pacs"
-version = "0.1.3"
+version = "0.1.4"
 
 [efm32pg.target.arch]
 efm32pg = "thumbv7em-none-eabihf"
@@ -61,7 +61,7 @@ efm32pg23 = "thumbv8m.main-none-eabihf"
 [efm32tg]
 name = "EFM32TG (Tiny Gecko / Tiny Gecko S1)"
 repository = "https://github.com/efm32-rs/efm32tg-pacs"
-version = "0.1.3"
+version = "0.1.4"
 
 [efm32tg.target.arch]
 efm32tg = "thumbv7m-none-eabi"
@@ -71,7 +71,7 @@ efm32tg11b = "thumbv6m-none-eabi"
 [efm32wg]
 name = "EFM32WG (Wonder Gecko)"
 repository = "https://github.com/efm32-rs/efm32wg-pacs"
-version = "0.1.3"
+version = "0.1.4"
 
 [efm32wg.target.arch]
 efm32wg = "thumbv7em-none-eabihf"
@@ -80,7 +80,7 @@ efm32wg = "thumbv7em-none-eabihf"
 [efm32zg]
 name = "EFM32ZG (Zero Gecko)"
 repository = "https://github.com/efm32-rs/efm32zg-pacs"
-version = "0.1.3"
+version = "0.1.4"
 
 [efm32zg.target.arch]
 efm32zg = "thumbv6m-none-eabi"
